@@ -19,7 +19,7 @@ const SECRET = process.env.RATE_LIMIT_SECRET ?? "zm-change-this-secret-in-produc
 
 export const LIMITS: Record<Provider, { max: number; windowMs: number }> = {
   anthropic: { max: 1,   windowMs: 60 * 60 * 1000 }, // 1 per hour
-  gemini:    { max: 100, windowMs: 60 * 60 * 1000 }, // TODO: bajar a 4 cuando termines de probar
+  gemini:    { max: 4,   windowMs: 60 * 60 * 1000 }, // 4 per hour
 };
 
 // ── In-memory IP store (best-effort, resets on cold start) ───
