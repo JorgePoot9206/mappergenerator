@@ -21,9 +21,26 @@ export function ImageUploader({ onImageSelected }: Props) {
       const reader = new FileReader();
       reader.onload = (e) => {
         const result = e.target?.result as string;
-        // result is "data:image/png;base64,ABC…" — we need just the base64 part
-        const base64 = result.split(",")[1];
-        onImageSelected(file, base64, file.type);
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 1024;
+          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+          // Reduce quality until base64 is under 4MB (safe for all APIs)
+          let quality = 0.85;
+          let dataUrl = canvas.toDataURL("image/jpeg", quality);
+          while (dataUrl.length * 0.75 > 4 * 1024 * 1024 && quality > 0.3) {
+            quality -= 0.1;
+            dataUrl = canvas.toDataURL("image/jpeg", quality);
+          }
+          onImageSelected(file, dataUrl.split(",")[1], "image/jpeg");
+        };
+        img.src = result;
       };
       reader.readAsDataURL(file);
     },

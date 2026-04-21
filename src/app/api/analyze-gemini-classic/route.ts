@@ -7,7 +7,7 @@ import { checkRateLimit, applyRateCookie, formatReset } from "@/lib/rateLimiter"
 //  Gemini Flash — returns point-marker zones (classic format)
 // ─────────────────────────────────────────────────────────────
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3-flash-preview";
 
 const PROMPT = `Analiza esta imagen y detecta automáticamente qué tipo de espacio o área muestra.
 Identifica todas las zonas, espacios o regiones visibles.

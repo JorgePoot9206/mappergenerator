@@ -7,7 +7,7 @@ import { checkRateLimit, applyRateCookie, formatReset } from "@/lib/rateLimiter"
 //  Gemini Flash — returns bounding-box shapes (manual tab)
 // ─────────────────────────────────────────────────────────────
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-3-flash-preview";
 
 const PROMPT = `Analyze this image and detect all visible zones, spaces, or regions.
 For each zone, calculate its bounding box as percentages of the total image dimensions (0–100).

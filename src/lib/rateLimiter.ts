@@ -83,6 +83,10 @@ export interface RateLimitResult {
 }
 
 export function checkRateLimit(req: NextRequest, provider: Provider): RateLimitResult {
+  if (process.env.RATE_LIMIT_ENABLED === "false") {
+    return { allowed: true, remaining: 999, resetMs: 0, cookieValue: "" };
+  }
+
   const now = Date.now();
   const { max, windowMs } = LIMITS[provider];
   const ip  = getIP(req);
