@@ -111,6 +111,9 @@ export default function RootLayout({
               <a href="/help" className="text-slate-300 hover:text-white transition-colors">
                 Docs
               </a>
+              <a href="/terms" className="text-slate-300 hover:text-white transition-colors">
+                Aviso de privacidad
+              </a>
               <div className="flex items-center gap-2">
                 <a
                   href="https://anthropic.com"

@@ -49,11 +49,25 @@ Reglas:
 - Las posiciones deben distribuirse por toda la imagen y no agruparse`;
 
 export async function POST(req: NextRequest) {
-  const rl = checkRateLimit(req, "anthropic");
+  // Parse body first so we can check isFallback before choosing which counter to use
+  let body: AnalyzeRequest;
+  try { body = await req.json(); } catch {
+    return NextResponse.json<AnalyzeError>({ error: "Invalid request body" }, { status: 400 });
+  }
+
+  const provider = body.isFallback ? "gemini-fallback" : "anthropic";
+  const rl = checkRateLimit(req, provider);
   const rlHeaders = new Headers();
   applyRateCookie(rlHeaders, rl.cookieValue);
 
   if (!rl.allowed) {
+    if (body.isFallback) {
+      // Both Gemini models failed AND the fallback quota is exhausted
+      return NextResponse.json<AnalyzeError>(
+        { error: "Gemini services appear to be down. Please try again later.", geminiDown: true },
+        { status: 503, headers: rlHeaders }
+      );
+    }
     return NextResponse.json<AnalyzeError>(
       { error: `Rate limit reached. Try again in ${formatReset(rl.resetMs)}.` },
       { status: 429, headers: rlHeaders }
@@ -61,7 +75,6 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const body: AnalyzeRequest = await req.json();
     const { image, mimeType } = body;
 
     if (!image || !mimeType) {

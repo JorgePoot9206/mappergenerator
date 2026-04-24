@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AnalyzeRequest, AnalyzeError, ClassicAnalyzeResponse } from "@/types";
-import { checkRateLimit, applyRateCookie, formatReset } from "@/lib/rateLimiter";
+import { checkRateLimit, undoRateLimit, applyRateCookie, formatReset } from "@/lib/rateLimiter";
 
 // ─────────────────────────────────────────────────────────────
 //  POST /api/analyze-gemini-classic
-//  Gemini Flash — returns point-marker zones (classic format)
+//  Tries Flash 2.5 → Flash 3. If both fail, returns modelError
+//  so the frontend can fall back to Claude.
 // ─────────────────────────────────────────────────────────────
 
-const MODEL = "gemini-3-flash-preview";
+const GEMINI_MODELS = [
+  { id: "gemini-2.5-flash-preview-04-17", label: "Flash 2.5" },
+  { id: "gemini-3-flash-preview",          label: "Flash 3"   },
+] as const;
 
 const PROMPT = `Analiza esta imagen y detecta automáticamente qué tipo de espacio o área muestra.
 Identifica todas las zonas, espacios o regiones visibles.
@@ -35,6 +39,35 @@ Reglas:
 - Detecta entre 4 y 20 zonas
 - Colores: habitaciones → cálidos (#f97316, #ec4899), agua → #06b6d4, vegetación → #22c55e, circulación → #94a3b8, estacionamiento → #475569, oficinas → #6366f1`;
 
+async function tryGeminiModel(
+  apiKey: string,
+  modelId: string,
+  image: string,
+  mimeType: string,
+): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [
+            { inline_data: { mime_type: mimeType, data: image } },
+            { text: PROMPT },
+          ]}],
+          generationConfig: { responseMimeType: "application/json" },
+        }),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const rl = checkRateLimit(req, "gemini");
   const rlHeaders = new Headers();
@@ -60,36 +93,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json<AnalyzeError>({ error: "GEMINI_API_KEY not configured" }, { status: 500 });
     }
 
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { inline_data: { mime_type: mimeType, data: image } },
-              { text: PROMPT },
-            ],
-          }],
-          generationConfig: { responseMimeType: "application/json" },
-        }),
-      }
-    );
+    // Try each model in order; first success wins
+    let rawText: string | null = null;
+    let usedLabel = "";
 
-    if (!geminiRes.ok) {
-      const err = await geminiRes.text();
-      return NextResponse.json<AnalyzeError>({ error: `Gemini API error: ${err.slice(0, 200)}` }, { status: 502 });
+    for (const model of GEMINI_MODELS) {
+      rawText = await tryGeminiModel(apiKey, model.id, image, mimeType);
+      if (rawText) { usedLabel = model.label; break; }
     }
 
-    const geminiData = await geminiRes.json();
-    const text = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-
-    if (!text) {
-      return NextResponse.json<AnalyzeError>({ error: "Empty response from Gemini" }, { status: 502 });
+    if (!rawText) {
+      undoRateLimit(req, "gemini");
+      const undoHeaders = new Headers();
+      applyRateCookie(undoHeaders, rl.cookieUndo);
+      return NextResponse.json<AnalyzeError>(
+        { error: "All Gemini models failed", modelError: true },
+        { status: 502, headers: undoHeaders }
+      );
     }
 
-    const jsonString = text.trim()
+    const jsonString = rawText.trim()
       .replace(/^```(?:json)?\s*/i, "")
       .replace(/\s*```$/, "")
       .trim();
@@ -98,8 +121,12 @@ export async function POST(req: NextRequest) {
     try {
       parsed = JSON.parse(jsonString);
     } catch {
+      undoRateLimit(req, "gemini");
+      const undoHeaders = new Headers();
+      applyRateCookie(undoHeaders, rl.cookieUndo);
       return NextResponse.json<AnalyzeError>(
-        { error: `Invalid JSON from Gemini: ${jsonString.slice(0, 200)}` }, { status: 502 }
+        { error: `Invalid JSON from Gemini: ${jsonString.slice(0, 200)}`, modelError: true },
+        { status: 502, headers: undoHeaders }
       );
     }
 
@@ -111,6 +138,7 @@ export async function POST(req: NextRequest) {
         y: Math.max(0, Math.min(100, z.position?.y ?? 50)),
       },
     }));
+    parsed.usedModel = usedLabel;
 
     const res = NextResponse.json<ClassicAnalyzeResponse>(parsed);
     applyRateCookie(res.headers, rl.cookieValue);

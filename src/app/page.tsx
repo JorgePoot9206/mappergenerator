@@ -18,6 +18,7 @@ import type {
   ClassicZone, ClassicZoneMapData, ClassicVisualStyle, ClassicAnalyzeResponse,
   // manual
   Zone, ZoneShape, ZoneMapData, DrawTool, AnalyzeResponse,
+  AnalyzeError,
 } from "@/types";
 
 // ─────────────────────────────────────────────────────────────
@@ -28,10 +29,29 @@ type AppMode = "auto" | "manual";
 type AIProvider = "anthropic" | "gemini";
 
 // ─────────────────────────────────────────────────────────────
+//  Rate limit status
+// ─────────────────────────────────────────────────────────────
+
+interface RLStatus {
+  gemini:    { remaining: number; max: number };
+  anthropic: { remaining: number; max: number };
+  fallback:  { remaining: number; max: number };
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Provider toggle
 // ─────────────────────────────────────────────────────────────
 
-function ProviderToggle({ value, onChange }: { value: AIProvider; onChange: (p: AIProvider) => void }) {
+function ProviderToggle({
+  value, onChange, rlStatus,
+}: {
+  value: AIProvider;
+  onChange: (p: AIProvider) => void;
+  rlStatus?: RLStatus | null;
+}) {
+  const claudeLeft  = rlStatus?.anthropic.remaining;
+  const geminiLeft  = rlStatus?.gemini.remaining;
+
   return (
     <div className="flex items-center gap-1 bg-slate-800/80 rounded-lg p-0.5 text-xs font-medium">
       <button
@@ -42,6 +62,11 @@ function ProviderToggle({ value, onChange }: { value: AIProvider; onChange: (p: 
           <path d="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zm-3.654 0H6.57L0 20h3.603l6.57-16.48z" />
         </svg>
         Claude
+        {claudeLeft !== undefined && (
+          <span className={`text-[10px] font-normal tabular-nums ${claudeLeft === 0 ? "text-red-400" : "opacity-50"}`}>
+            {claudeLeft}/{rlStatus!.anthropic.max}
+          </span>
+        )}
       </button>
       <button
         onClick={() => onChange("gemini")}
@@ -51,6 +76,11 @@ function ProviderToggle({ value, onChange }: { value: AIProvider; onChange: (p: 
           <path d="M12 24A14.304 14.304 0 000 12 14.304 14.304 0 0012 0a14.305 14.305 0 0012 12 14.305 14.305 0 00-12 12z" />
         </svg>
         Gemini
+        {geminiLeft !== undefined && (
+          <span className={`text-[10px] font-normal tabular-nums ${geminiLeft === 0 ? "text-red-400" : "opacity-50"}`}>
+            {geminiLeft}/{rlStatus!.gemini.max}
+          </span>
+        )}
       </button>
     </div>
   );
@@ -152,24 +182,30 @@ function ModeTabs({ mode, onChange }: { mode: AppMode; onChange: (m: AppMode) =>
 //  Provider badge (shown on results)
 // ─────────────────────────────────────────────────────────────
 
-function ProviderBadge({ provider }: { provider: AIProvider }) {
+function ProviderBadge({ provider, modelLabel }: { provider: AIProvider; modelLabel: string }) {
   if (provider === "gemini") {
     return (
-      <span className="flex items-center gap-1 px-2 py-1 bg-blue-950/60 border border-blue-800/60 rounded-lg text-blue-400 text-xs font-medium">
-        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 24A14.304 14.304 0 000 12 14.304 14.304 0 0012 0a14.305 14.305 0 0012 12 14.305 14.305 0 00-12 12z" />
-        </svg>
-        Gemini Flash
-      </span>
+      <div className="flex flex-col items-start gap-0.5">
+        <span className="flex items-center gap-1 px-2 py-1 bg-blue-950/60 border border-blue-800/60 rounded-lg text-blue-400 text-xs font-medium">
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 24A14.304 14.304 0 000 12 14.304 14.304 0 0012 0a14.305 14.305 0 0012 12 14.305 14.305 0 00-12 12z" />
+          </svg>
+          Gemini Flash
+        </span>
+        <span className="text-slate-500 text-[10px] pl-1">{modelLabel}</span>
+      </div>
     );
   }
   return (
-    <span className="flex items-center gap-1 px-2 py-1 bg-orange-950/60 border border-orange-800/60 rounded-lg text-orange-400 text-xs font-medium">
-      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zm-3.654 0H6.57L0 20h3.603l6.57-16.48z" />
-      </svg>
-      Claude
-    </span>
+    <div className="flex flex-col items-start gap-0.5">
+      <span className="flex items-center gap-1 px-2 py-1 bg-orange-950/60 border border-orange-800/60 rounded-lg text-orange-400 text-xs font-medium">
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zm-3.654 0H6.57L0 20h3.603l6.57-16.48z" />
+        </svg>
+        Claude
+      </span>
+      <span className="text-slate-500 text-[10px] pl-1">{modelLabel}</span>
+    </div>
   );
 }
 
@@ -179,6 +215,18 @@ function ProviderBadge({ provider }: { provider: AIProvider }) {
 
 export default function Home() {
   const [mode, setMode] = useState<AppMode>("auto");
+
+  // ── Rate limit status ───────────────────────────────────────
+  const [rlStatus, setRlStatus] = useState<RLStatus | null>(null);
+
+  const fetchRLStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rate-limit/status");
+      if (res.ok) setRlStatus(await res.json());
+    } catch { /* non-critical */ }
+  }, []);
+
+  useEffect(() => { fetchRLStatus(); }, [fetchRLStatus]);
 
   // ── Shared image state ──────────────────────────────────────
   const [imageUrl, setImageUrl]       = useState<string | null>(null);
@@ -197,8 +245,10 @@ export default function Home() {
   const [classicDescription, setClassicDescription]  = useState("");
   const [autoLoading, setAutoLoading]                 = useState(false);
   const [autoError, setAutoError]                     = useState<string | null>(null);
+  const [autoGeminiDown, setAutoGeminiDown]           = useState(false);
   const [autoProvider, setAutoProvider]               = useState<AIProvider>("anthropic");
   const [autoUsedProvider, setAutoUsedProvider]       = useState<AIProvider | null>(null);
+  const [autoUsedModel, setAutoUsedModel]             = useState<string | null>(null);
 
   // ── MANUAL tab state ────────────────────────────────────────
   const [manualZones, setManualZones]         = useState<Zone[]>([]);
@@ -207,40 +257,62 @@ export default function Home() {
   const [pendingShape, setPendingShape]       = useState<ZoneShape | null>(null);
   const [manualLoading, setManualLoading]     = useState(false);
   const [manualError, setManualError]         = useState<string | null>(null);
+  const [manualGeminiDown, setManualGeminiDown] = useState(false);
   const [manualImageType, setManualImageType] = useState("");
   const [manualDescription, setManualDescription] = useState("");
   const [manualProvider, setManualProvider]   = useState<AIProvider>("anthropic");
   const [manualUsedProvider, setManualUsedProvider] = useState<AIProvider | null>(null);
+  const [manualUsedModel, setManualUsedModel] = useState<string | null>(null);
 
   // ─────────────────────────────────────────────────────────────
   //  AI classic analysis
   // ─────────────────────────────────────────────────────────────
 
-  const runClassicAnalysis = useCallback(async (b64: string, mime: string, key: string, provider: AIProvider = "anthropic") => {
+  const runClassicAnalysis = useCallback(async (
+    b64: string, mime: string, key: string,
+    provider: AIProvider = "anthropic",
+    isFallback = false,
+  ) => {
     setAutoLoading(true);
     setAutoError(null);
+    setAutoGeminiDown(false);
     setClassicZones([]);
     const endpoint = provider === "gemini" ? "/api/analyze-gemini-classic" : "/api/analyze-classic";
     try {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: b64, mimeType: mime }),
+        body: JSON.stringify({ image: b64, mimeType: mime, isFallback }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error((data as { error: string }).error ?? "Analysis failed");
+      if (!res.ok) {
+        const errData = data as AnalyzeError;
+        if (errData.geminiDown) {
+          setAutoGeminiDown(true);
+          throw new Error("Gemini services appear to be down. Please try again later.");
+        }
+        if (errData.modelError && provider === "gemini") {
+          setAutoProvider("anthropic");
+          setAutoLoading(false);
+          await runClassicAnalysis(b64, mime, key, "anthropic", true);
+          return;
+        }
+        throw new Error(errData.error ?? "Analysis failed");
+      }
       const result = data as ClassicAnalyzeResponse;
       const savedNotes = loadNotes(key);
       setClassicZones(result.zones.map((z) => ({ ...z, notes: savedNotes[z.id] ?? "" })));
       setClassicImageType(result.imageType);
       setClassicDescription(result.description);
       setAutoUsedProvider(provider);
+      setAutoUsedModel(provider === "gemini" ? (result.usedModel ?? "Flash 2.5") : "Sonnet 4.5");
     } catch (err) {
       setAutoError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setAutoLoading(false);
+      fetchRLStatus();
     }
-  }, []);
+  }, [fetchRLStatus]);
 
   // ─────────────────────────────────────────────────────────────
   //  Image upload
@@ -303,31 +375,48 @@ export default function Home() {
   //  Manual zone interactions
   // ─────────────────────────────────────────────────────────────
 
-  const runManualAI = useCallback(async () => {
+  const runManualAI = useCallback(async (providerOverride?: AIProvider, isFallback = false) => {
     if (!imageBase64 || !mimeType) return;
+    const provider = providerOverride ?? manualProvider;
     setManualLoading(true);
     setManualError(null);
-    const endpoint = manualProvider === "gemini" ? "/api/analyze-gemini" : "/api/analyze";
+    setManualGeminiDown(false);
+    const endpoint = provider === "gemini" ? "/api/analyze-gemini" : "/api/analyze";
     try {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: imageBase64, mimeType }),
+        body: JSON.stringify({ image: imageBase64, mimeType, isFallback }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error((data as { error: string }).error ?? "Analysis failed");
+      if (!res.ok) {
+        const errData = data as AnalyzeError;
+        if (errData.geminiDown) {
+          setManualGeminiDown(true);
+          throw new Error("Gemini services appear to be down. Please try again later.");
+        }
+        if (errData.modelError && provider === "gemini") {
+          setManualProvider("anthropic");
+          setManualLoading(false);
+          await runManualAI("anthropic", true);
+          return;
+        }
+        throw new Error(errData.error ?? "Analysis failed");
+      }
       const result = data as AnalyzeResponse;
       const savedNotes = loadNotes(imageKey);
       setManualZones(result.zones.map((z) => ({ ...z, notes: savedNotes[z.id] ?? "", href: "", target: "_blank" as const })));
       setManualImageType(result.imageType);
       setManualDescription(result.description);
-      setManualUsedProvider(manualProvider);
+      setManualUsedProvider(provider);
+      setManualUsedModel(provider === "gemini" ? (result.usedModel ?? "Flash 2.5") : "Sonnet 4.5");
     } catch (err) {
       setManualError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setManualLoading(false);
+      fetchRLStatus();
     }
-  }, [imageBase64, mimeType, imageKey, manualProvider]);
+  }, [imageBase64, mimeType, imageKey, manualProvider, fetchRLStatus]);
 
   const handleZoneCreated = useCallback((shape: ZoneShape) => {
     setPendingShape(shape);
@@ -425,6 +514,15 @@ export default function Home() {
               <span key={ex} className="px-3 py-1 bg-slate-800/80 text-slate-400 text-xs rounded-full border border-slate-700">{ex}</span>
             ))}
           </div>
+
+          {/* Privacy notice */}
+          <p className="text-slate-600 text-xs text-center mt-8 max-w-sm leading-relaxed">
+            ⚠ Al usar Gemini (Free Tier), Google puede utilizar tus imágenes para entrenar sus modelos.
+            No subas imágenes con datos personales o sensibles.{" "}
+            <a href="/terms" className="text-slate-500 hover:text-slate-400 underline underline-offset-2 transition-colors">
+              Ver aviso completo
+            </a>
+          </p>
         </div>
       )}
 
@@ -451,7 +549,7 @@ export default function Home() {
               {/* Auto tab controls */}
               {mode === "auto" && (
                 <>
-                  <ProviderToggle value={autoProvider} onChange={(p) => { setAutoProvider(p); setClassicZones([]); setAutoError(null); }} />
+                  <ProviderToggle value={autoProvider} onChange={(p) => { setAutoProvider(p); setClassicZones([]); setAutoError(null); }} rlStatus={rlStatus} />
                   {classicZones.length > 0 && (
                     <ClassicVisualStyleSwitch value={classicStyle} onChange={setClassicStyle} />
                   )}
@@ -475,7 +573,7 @@ export default function Home() {
               {/* Manual tab controls */}
               {mode === "manual" && (
                 <>
-                  <ProviderToggle value={manualProvider} onChange={(p) => { setManualProvider(p); }} />
+                  <ProviderToggle value={manualProvider} onChange={(p) => { setManualProvider(p); }} rlStatus={rlStatus} />
                   {manualZones.length > 0 && (
                     <ExportMenu data={manualExportData} imageBase64={imageBase64} mimeType={mimeType} />
                   )}
@@ -515,13 +613,17 @@ export default function Home() {
 
                 {/* Error */}
                 {autoError && !autoLoading && (
-                  <div className="max-w-xl mx-auto mt-8 bg-red-950/50 border border-red-800 rounded-xl p-5">
-                    <p className="text-red-300 font-medium">Analysis failed</p>
-                    <p className="text-red-400 text-sm mt-1">{autoError}</p>
-                    <button onClick={() => runClassicAnalysis(imageBase64, mimeType, imageKey)}
-                      className="mt-3 px-3 py-1.5 bg-red-800 hover:bg-red-700 text-red-100 rounded-lg text-sm transition-colors">
-                      Try again
-                    </button>
+                  <div className={`max-w-xl mx-auto mt-8 rounded-xl p-5 border ${autoGeminiDown ? "bg-amber-950/40 border-amber-700" : "bg-red-950/50 border-red-800"}`}>
+                    <p className={`font-medium ${autoGeminiDown ? "text-amber-300" : "text-red-300"}`}>
+                      {autoGeminiDown ? "⚠ Gemini service unavailable" : "Analysis failed"}
+                    </p>
+                    <p className={`text-sm mt-1 ${autoGeminiDown ? "text-amber-400" : "text-red-400"}`}>{autoError}</p>
+                    {!autoGeminiDown && (
+                      <button onClick={() => runClassicAnalysis(imageBase64, mimeType, imageKey)}
+                        className="mt-3 px-3 py-1.5 bg-red-800 hover:bg-red-700 text-red-100 rounded-lg text-sm transition-colors">
+                        Try again
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -529,7 +631,7 @@ export default function Home() {
                 {!autoLoading && classicZones.length > 0 && (
                   <div className="max-w-4xl mx-auto">
                     <div className="mb-3 flex items-center gap-2 text-sm flex-wrap">
-                      {autoUsedProvider && <ProviderBadge provider={autoUsedProvider} />}
+                      {autoUsedProvider && <ProviderBadge provider={autoUsedProvider} modelLabel={autoUsedModel ?? ""} />}
                       {classicImageType && (
                         <span className="px-2 py-1 bg-slate-900/80 rounded-lg border border-slate-800 text-indigo-400 font-medium">{classicImageType}</span>
                       )}
@@ -597,7 +699,7 @@ export default function Home() {
                 <div className="w-full max-w-4xl mx-auto">
                   {(manualUsedProvider || manualImageType) && (
                     <div className="mb-3 flex items-center gap-2 text-sm flex-wrap">
-                      {manualUsedProvider && <ProviderBadge provider={manualUsedProvider} />}
+                      {manualUsedProvider && <ProviderBadge provider={manualUsedProvider} modelLabel={manualUsedModel ?? ""} />}
                       {manualImageType && (
                         <span className="px-2 py-1 bg-slate-900/80 rounded-lg border border-slate-800 text-indigo-400 font-medium">{manualImageType}</span>
                       )}

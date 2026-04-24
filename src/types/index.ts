@@ -68,18 +68,22 @@ export type VisualStyle = "fill" | "outline" | "labels";
 // ── API payloads ──────────────────────────────────────────────
 
 export interface AnalyzeRequest {
-  image: string;    // base-64
+  image: string;     // base-64
   mimeType: string;
+  isFallback?: boolean; // true when Claude is called after all Gemini models failed
 }
 
 export interface AnalyzeResponse {
   imageType: string;
   description: string;
   zones: Omit<Zone, "notes" | "href" | "target">[];
+  usedModel?: string; // label of the model that ran (set by Gemini routes)
 }
 
 export interface AnalyzeError {
   error: string;
+  modelError?: boolean;  // true when the AI model itself failed (not rate-limit/config)
+  geminiDown?: boolean;  // true when Gemini fallback quota is exhausted — show "services down" message
 }
 
 // ── Classic (AI auto-detect) zone model ──────────────────────
@@ -110,4 +114,5 @@ export interface ClassicAnalyzeResponse {
   imageType: string;
   description: string;
   zones: Omit<ClassicZone, "notes">[];
+  usedModel?: string; // label of the model that ran (set by Gemini routes)
 }
