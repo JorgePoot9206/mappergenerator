@@ -137,6 +137,23 @@ export default function RootLayout({
           </div>
         </nav>
         {children}
+
+        {/* Footer */}
+        <footer className="border-t border-slate-800 bg-slate-900/60 py-4 mt-8">
+          <p className="text-center text-xs text-slate-500">
+            Una herramienta gratuita de{" "}
+            <a
+              href="https://kaanmkt.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-slate-400 hover:text-slate-300 transition-colors"
+            >
+              Kaan Agency
+            </a>
+            {" · "}Mapea zonas en imágenes con IA o manualmente
+            {" · "}Exporta en JSON, HTML y React sin registro
+          </p>
+        </footer>
       </body>
     </html>
   );
